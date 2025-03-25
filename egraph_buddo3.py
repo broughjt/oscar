@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+import itertools
 import sympy as sp
 
 EClass = sp.Symbol
@@ -60,6 +61,13 @@ class EGraph:
             if self.hash_cons == hash_cons1: # reached fixed point
                 return
             self.hash_cons = hash_cons1   
+
+    def rewrite(self, arguments_length, rule):
+        for eclasses in itertools.product(self.eclasses, repeat=arguments_length):
+            l, r = rule(*eclasses)
+            l = self.append_term(l)
+            r = self.append_term(r)
+            self.union(l, r)
 
 def eclass_id_to_symbol(n):
     return sp.symbols(f"e{n}")

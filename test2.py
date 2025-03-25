@@ -1,0 +1,26 @@
+from egraph_buddo2 import *
+
+e = EGraph()
+sin = e.append_term(("sin", ("x",)))
+cos = e.append_term(("cos", ("x",)))
+t1 = e.append_term(sin*sin + cos*cos)
+print(e)
+e.union(t1, 1)
+e.rebuild()
+print(e)
+one_minus_sin = e.append_term(1 - sin)
+one_plus_sin = e.append_term(1 + sin)
+e.append_term(one_minus_sin)
+e.append_term(one_plus_sin)
+e.rebuild()
+print(e)
+one_minus_sin_divide_cos = ("divide", one_minus_sin, cos)
+cos_divide_one_plus_sin = ("divide", cos, one_plus_sin)
+# one_minus_sin_divide_cos = one_minus_sin / cos
+# cos_divide_one_plus_sin = cos / one_plus_sin
+e.append_term(one_minus_sin_divide_cos)
+e.append_term(cos_divide_one_plus_sin)
+e.rebuild()
+print(e)
+print(e.find(one_minus_sin_divide_cos))
+print(e.find(one_minus_sin_divide_cos), e.find(cos_divide_one_plus_sin))
