@@ -8,7 +8,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        pythonPackages = packages: with packages; [ sympy ];
+        pythonPackages = packages: with packages; [ pytest sympy pyrsistent ];
       in
         {
           devShells.default = pkgs.mkShell {
