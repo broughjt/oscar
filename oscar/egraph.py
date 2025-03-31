@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from functools import reduce
-from itertools import chain
+from itertools import chain, groupby
 from pprint import pprint
 from pyrsistent import pmap
 from typing import Union, Mapping
@@ -44,24 +44,17 @@ class PatternVariable:
 
 @dataclass(frozen=True)
 class PatternTerm:
-    operand: str
-    operator: list[PatternTerm | PatternVariable]
+    operator: str
+    operands: list[PatternTerm | PatternVariable]
     
 Pattern = Union[PatternTerm, PatternVariable]
 
 Substitution = Mapping[PatternVariable, EClassId]
 
-@dataclass
+@dataclass(frozen=True)
 class Rule:
     left: Pattern
     right: Pattern
-
-def substitute(p: Pattern, s: Substitution) -> ENode | EClassId:
-    match p:
-        case PatternVariable(x):
-            return s[x]
-        case PatternTerm(f, ps):
-            return ENode(f, tuple((substitute(p, s) for p in ps)))
 
 class EGraph:
     def __init__(self):
@@ -161,9 +154,27 @@ class EGraph:
         """
         Restore the hashcons and congruence invariants.
         """
-        while self.pending:
-            pending = self.pending
+        # 1.
+        # while self.pending:
+        #     # TODO:
+        #     # pending = self.pending
+        #     # Remove duplicate consecutive entries
+        #     # https://stackoverflow.com/questions/5738901/removing-elements-that-have-consecutive-duplicates#5738933
+        #     # pending = [a for a, _ in groupby(self.pending)]
+        #     pending = self.
+        #     self.pending = list()
+        #     for a in pending:
+        #         self.repair(self.find(a))
+
+        # 2.
+        # while len(self.pending) > 0:
+        #     self.repair(self.find(self.pending.pop()))
+
+        # 3.
+        while len(self.pending) > 0:
+            pending = { self.find(a) for a in self.pending }
             self.pending = list()
+
             for a in pending:
                 self.repair(self.find(a))
 
@@ -177,58 +188,71 @@ class EGraph:
 
         # Fix the hash-cons
         for (n, b) in e.parents:
-            self.hash_cons.pop(n)
+            try:
+                self.hash_cons.pop(n)
+            except:
+                pass
             self.hash_cons[self.canonicalize(n)] = self.find(b)
 
         # Upward merge
         parents = dict()
+        did_union = False
         for (n, b) in e.parents:
             n = self.canonicalize(n)
             if c := parents.get(n):
                 self.union(b, c)
+                did_union = True
             parents[n] = self.find(b)
         self.classes[a].parents = list(parents.items())
 
-    # Relational E-matching Zhang et al. Figure 3
+    # Efficient E-matching for SMT Solvers Figure 1 p. 186
     #
-    # God bless the UW crew for making that figure! Excellent
-    # two-liner describing the naive e-matching algorithm from the
-    # Simplify paper which I seriously could not find. The thing
-    # is like 150 pages long and has no index or table of contents.
+    # De Moura and Bjorner (Section 2.1, p. 185) write "the set of
+    # relevant substitutions for a pattern $p$ can be obtained by
+    # taking $\bigcup_{t \in E} \match(p, t, \emptyset)$," but it
+    # needs to be the set containing an empty subsitution or the
+    # handler for variables will never bind anything in the first
+    # place. If we initially pass the set containing an empty
+    # subsitution then the handler bind the first variable and that
+    # gets the whole thing going. If you try to add a special case for
+    # an empty subsitution set, you will inadvertently bind variables
+    # to an already failed match. Doing it this way preserves the
+    # property that if an earlier sibling node failed a pattern,
+    # latter sibling nodes will respect this decision because they
+    # will never see that subsitution. Poorly written, I'm having a
+    # hard time saying it concisely.
     def ematch_at(self, p: Pattern, a: EClassId, S: set[Substitution]) -> set[Substitution]:
         """
-        Find nodes in `a` which match the pattern `p`. For each
-        match, return a substitution which maps pattern variables to
+        Find nodes in `a` which match the pattern `p`, returning
+        for each match a substitution which maps pattern variables to
         e-class ids.
         """
         a = self.find(a)
         match p:
             case PatternVariable(x):
-                if S:
-                    # Keep the current substitution if we've already bound
-                    # to this e-class, otherwise add this binding to the
-                    # substitution
-
-                    # Curse you Perry the Platypus/Guido van Rossum
-                    # I want to call map on the option but that's not a thing
-                    return { (s if (b := s.get(x) and self.find(b)) == a else (pmap({x: a}) | s)) for s in S }
-                else:
-                    # If the set of subsitutions is currently empty,
-                    # new variable binding happens here
-                    return { pmap({x: a}) }
+                return { s | pmap({x: a}) for s in S if x not in s} \
+                    | { s for s in S if x in s and self.find(s[x]) == a }
             case PatternTerm(f, ps):
                 return set(chain.from_iterable((
-                    # We're reducing here so that, for example, if the
-                    # pattern is `f(x, g(x, y))`, that we know what
-                    # `x` is by the time we reach `g`.
+                    # We use a fold here because matching later
+                    # arguments depends on the subsitutions made for
+                    # earlier arguments.
 
-                    # More curses: why no pattern matching for lambdas?
+                    # Curse you Perry the Platypus/Guido van Rossum!
+                    # Why no pattern matching for lambdas?
                     # curses = (pattern, e-class) = (p, b)
                     reduce(lambda S, curses: self.ematch_at(curses[0], curses[1], S), zip(ps, n.operands), S)
                     for n in self.classes[a].nodes
-                    if f == n.operator
+                    if f == n.operator and len(ps) == len(n.operands)
                 )))
 
+    # De Moura and Bjorner (section 1.2, p. 185) write: "The set of
+    # relevant substitutions for a pattern p can be obtained by taking
+    # $\bigcup_{t \in E} match(p, t, \emptyset)$."  But shouldn't it
+    # be $match(p, t, \left{ \emptyset \right})$? Otherwise I don't
+    # see any to ever match a variable, as the rule for pattern
+    # variables returns set builders over $S$. Doing it this way seems
+    # to work.
     def ematch(self, p: Pattern) -> list[tuple[Substitution, EClassId]]:
         """
         Find nodes in the e-graph which match the pattern `p`. For
@@ -236,9 +260,24 @@ class EGraph:
         to e-class ids and the e-class id of the node which matched.
         """
         return list(chain.from_iterable((
-            ((s, a) for s in self.ematch_at(p, a, set()))
+            ((s, a) for s in self.ematch_at(p, a, {pmap()}))
             for a in self.classes.keys()
         )))
+
+    # I think this is right? If the right-hand side of the
+    # pattern is just a variable, we shouldn't add any new
+    # nodes, just union the e-class with one of it's
+    # matched children. Similarly, if the right-hand side
+    # is deeply nested and contains terms which aren't
+    # even in the e-graph yet, we have to add them before
+    # we can we refer to the as nodes in a particular
+    # e-class.
+    def substitute_add(self, p: Pattern, s: Substitution) -> EClassId:
+        match p:
+            case PatternVariable(x):
+                return s[x]
+            case PatternTerm(f, ps):
+                return self.add(ENode(f, tuple((self.substitute_add(p, s) for p in ps))))
 
     def count_nodes(self) -> int:
         """
@@ -250,10 +289,10 @@ class EGraph:
         """
         This week on Yankee and The Brave
         """
-        # When is the e-graph saturated? When we hit a fixed point, in
-        # the sense that running the rules doesn't add any new
-        # nodes. Since we never remove anything, it is sufficient to
-        # check the total node count.
+        # The e-graph is "saturated" when we reach a fixed point, in
+        # the sense that running the rules doesn't add any new nodes.
+        # Since we never remove anything, it is sufficient to check
+        # the total node count.
 
         for i in range(1, l+1):
             k = self.count_nodes()
@@ -263,16 +302,12 @@ class EGraph:
             )))
                     
             for (r, s, a) in ms:
-                # I think this is right? If the right hand side of the
-                # rule is just a variable, that corresponds to an
-                # e-class id, so there's no new node to add in that
-                # case, we should just union the child e-class with
-                # the e-class of the parent node.
-                match substitute(r.right, s):
-                    case EClassId() as _b:
-                        b = _b
-                    case ENode() as n:
-                        b = self.add(n)
+                b = self.substitute_add(r.right, s)
+                # match substitute(r.right, s):
+                #     case EClassId() as _b:
+                #         b = _b
+                #     case ENode() as n:
+                #         b = self.add(n)
                 self.union(a, b)
             self.rebuild()
 
