@@ -45,6 +45,12 @@ class Rule:
     left: Pattern
     right: Pattern
 
+@dataclass(frozen=True)
+class RuleConditional:
+    left: Pattern
+    right: Pattern
+    predicate: Callable[[Substitution, EGraph], bool]
+
 @dataclass
 class EGraph:
     basis: list[Expr]
