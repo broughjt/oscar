@@ -163,6 +163,7 @@ class EGraph:
     # See `ematch_at` in the non-frankenstein-monster e-graph
     def ematch_at(self, p: Pattern, a: EClassId, S: set[Substitution]) -> set[Substitution]:
         a = self.find(a)
+        print(a)
         match p:
             case PatternVariable(x):
                 return { s | pmap({x: a}) for s in S if x not in s} \
